@@ -1,0 +1,1021 @@
+#include <EEPROM.h>
+#include <LedControl.h>
+#include <LiquidCrystal.h>
+
+// # LCD
+const byte rs = 9;
+const byte en = 8;
+const byte d4 = 7;
+const byte d5 = 6;
+const byte d6 = 5;
+const byte d7 = 4;
+const byte lcdBacklightPin = 3; // PWM
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+// # Matrix LED 8x8
+const byte dinPin = 12;
+const byte clockPin = 11;
+const byte loadPin = 10;
+const byte matrixSize = 8;
+LedControl lc = LedControl(dinPin, clockPin, loadPin, 1);
+
+
+// # Joystick
+const int joystickX = A0;
+const int joystickY = A1;
+const int joystickSW = 2;
+
+// Definirea starilor pentru meniu
+enum MenuState {
+  MAIN_MENU,
+  GAME,
+  SETTINGS,
+  AFK,
+  HOW_TO_PLAY,
+  HIGHSCORES
+};
+
+MenuState currentMenuState = MAIN_MENU;
+
+int menuIndex = 0;
+int settingsIndex = 0;
+
+// AFK
+unsigned long lastActivityTime = millis(); 
+const unsigned long afkTimeout = 10000;
+int infoPage = 0; 
+
+// Caractere personalizate pentru sageti
+byte RightArrow[] = {
+  B00011,
+  B00110,
+  B01100,
+  B11000,
+  B11000,
+  B01100,
+  B00110,
+  B00011
+};
+
+byte LeftArrow[] = {
+  B11000,
+  B01100,
+  B00110,
+  B00011,
+  B00011,
+  B00110,
+  B01100,
+  B11000
+};
+
+
+// Variabile pentru Jocul Snake:
+
+unsigned long lastMoveTime = 0;
+unsigned long moveInterval = 1000; 
+
+
+struct Point {
+  int x;
+  int y;
+};
+
+Point snake[64]; 
+int snakeLength;
+Point food;
+int direction;
+int score = 0;
+int lives = 3;
+int highScore = 0;
+const int buzzerPin = A3;
+
+// Variabile Brightness
+int lcdBrightness = 50; 
+int matrixBrightness = 50; 
+
+// Definește adresele pentru stocarea setărilor în EEPROM
+const int addressLCD = 0;
+const int addressMatrix = sizeof(lcdBrightness);
+
+// Variabile pentru Sound
+bool soundEnabled = true; 
+const int addressSound = addressMatrix + sizeof(matrixBrightness); 
+
+// Variabila pentru Sectiunea "How To Play"
+
+int howToPlayPageIndex = 0;
+
+// Adresa in EEPROM
+const int NICKNAME_ADDRESS = 10; 
+bool firstStart = true;
+bool confirmInProgress = false;
+
+char nickname[10]; 
+unsigned long lastInputTime = 0;
+const unsigned long inputTimeout = 3000; 
+bool nicknameEntered = false;
+
+struct Highscore {
+  char nickname[10]; 
+  int score;
+  bool isSet;
+};
+
+Highscore highscores[5];
+
+
+// Variabile care sa inlocuiasca delay()
+
+unsigned long timpAnterior = 0; 
+const long interval = 3000; 
+
+
+void setup() {
+  // Initializarea hardware-ului
+  lc.shutdown(0, false);
+  lc.setIntensity(0, 8);
+  lc.clearDisplay(0);
+  lcd.begin(16, 2);
+  lcd.createChar(0, RightArrow);
+  lcd.createChar(1, LeftArrow);
+  analogWrite(lcdBacklightPin, 255);
+  pinMode(joystickSW, INPUT_PULLUP);
+  pinMode(13, OUTPUT);
+  pinMode(A2, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+
+  // Încarcarea setarilor din EEPROM
+  EEPROM.get(addressLCD, lcdBrightness);
+  EEPROM.get(addressMatrix, matrixBrightness);
+  EEPROM.get(addressSound, soundEnabled);
+  
+  analogWrite(lcdBacklightPin, lcdBrightness);
+  lc.setIntensity(0, matrixBrightness);
+  Serial.begin(9600);
+  for (int i = 0; i < 5; i++) {
+    EEPROM.get(i * sizeof(Highscore), highscores[i]);
+    Serial.print("Highscore ");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.print(highscores[i].nickname);
+    Serial.print(" - ");
+    Serial.println(highscores[i].score);
+  }
+  initializeHighscores();
+  displayIntro();
+  updateMenu();
+  drawHeart();
+}
+
+
+void displayIntro() {
+  timpAnterior = millis();
+  lcd.clear();
+  lcd.print(" Bine ati venit");
+  lcd.setCursor(0, 1);
+  lcd.print("    la joaca!");
+
+  while (millis() - timpAnterior < interval) {
+  }
+
+  timpAnterior = millis();
+  lcd.clear();
+  lcd.print("  Realizat de:");
+  lcd.setCursor(0, 1);
+  lcd.print("Dobre Tiberiu-G.");
+
+  while (millis() - timpAnterior < interval) {
+  }
+
+  timpAnterior = millis();
+  lcd.clear();
+  lcd.print(" Grupa 364, CTI");
+  lcd.setCursor(0,1);
+  lcd.print("   Unibuc FMI");
+
+  while (millis() - timpAnterior < interval) {
+  }
+
+  lcd.clear();
+  lastActivityTime = millis();
+}
+
+void showHighscores() {
+    unsigned long timpAnterior = millis();
+    const long interval = 2000; 
+    int index = 0; 
+    bool asteptare = false; 
+
+    lcd.clear();
+    lcd.print("Top Scoruri:");
+
+    while (index < 5) { 
+        if (millis() - timpAnterior >= interval) { 
+            timpAnterior = millis(); 
+
+            if (!asteptare && highscores[index].isSet) { 
+                int line = index % 2;
+                lcd.setCursor(0, line);
+                lcd.print(index + 1);
+                lcd.print(". ");
+                lcd.print(highscores[index].nickname);
+                lcd.print(": ");
+                lcd.print(highscores[index].score);
+
+                if (line == 1 || index == 4) {
+                    asteptare = true; 
+                    lcd.clear();
+                } else {
+                    index++; 
+                }
+            } else if (asteptare) {
+                asteptare = false; 
+                index++; 
+            }
+        }
+    }
+
+    currentMenuState = MAIN_MENU; 
+    updateMenu();
+}
+
+  
+void loop() {
+  static unsigned long lastTime = 0;
+  static unsigned long lastAFKUpdateTime = 0;
+  unsigned long currentTime = millis();
+  static unsigned long lastNicknameSaveTime = 0; 
+  bool nicknameSaveDisplayed = false; 
+    if (currentTime - lastTime > 200) {
+        if (analogRead(joystickY) < 400 || analogRead(joystickY) > 600 || digitalRead(joystickSW) == LOW) {
+            lastActivityTime = currentTime;
+            if (currentMenuState == AFK) {
+                currentMenuState = MAIN_MENU;
+                updateMenu();
+            }
+        }
+        if (currentMenuState != GAME && currentMenuState != AFK && currentTime - lastActivityTime > afkTimeout) {
+            currentMenuState = AFK;
+            infoPage = 0;
+            displayInfoScreen();
+        }
+        switch (currentMenuState) {
+            case MAIN_MENU:
+                navigateMainMenu();
+                break;
+            case SETTINGS:
+                navigateSettings();
+                break;
+            case GAME:
+                handleJoystick();
+                if (currentTime - lastMoveTime > moveInterval) {
+                    moveSnake();
+                    updateDisplay();
+                    lastMoveTime = currentTime;
+                }
+                break;
+            case AFK:
+                if (currentTime - lastAFKUpdateTime > 2000) {
+                    displayInfoScreen();
+                    lastAFKUpdateTime = currentTime;
+                }
+                break;
+            case HOW_TO_PLAY:
+                showHowToPlay();
+                break;
+            case HIGHSCORES:
+                initializeHighscores();
+                showHighscores();
+                break;
+        }
+
+        lastTime = currentTime;
+    }
+
+    // Logica pentru introducerea nickname-ului
+    if (firstStart && !nicknameEntered) {
+        enterNickname();
+    } else if (firstStart && nicknameEntered && digitalRead(joystickSW) == LOW) {
+        unsigned long pressTime = millis();
+        while (digitalRead(joystickSW) == LOW) {
+            if (millis() - pressTime > 2000) { 
+                // Salvare nickname în EEPROM
+                for (int i = 0; i < 10; i++) {
+                    EEPROM.update(NICKNAME_ADDRESS + i, nickname[i]);
+                    if (nickname[i] == '\0') break;
+                }
+                firstStart = false;
+                lcd.clear();
+                lcd.print("Nickname salvat!");
+                lastNicknameSaveTime = millis();
+                nicknameSaveDisplayed = true;
+                break;
+            }
+        }
+    }
+     if (nicknameSaveDisplayed && (millis() - lastNicknameSaveTime > 2000)) {
+      updateMenu();
+      nicknameSaveDisplayed = false;
+  }
+}
+
+
+void handleJoystick() {
+  int xVal = analogRead(joystickX);
+  int yVal = analogRead(joystickY);
+  bool hasNavigated = false;
+
+  if (xVal < 400 || xVal > 600 || yVal < 400 || yVal > 600) {
+    lastActivityTime = millis();
+    if (xVal < 400 && direction != 3) {
+      direction = 1; 
+      hasNavigated = true;
+    } else if (xVal > 600 && direction != 1) {
+      direction = 3; 
+      hasNavigated = true;
+    }
+    if (yVal < 400 && direction != 2) {
+      direction = 0; 
+      hasNavigated = true;
+    } else if (yVal > 600 && direction != 0) {
+      direction = 2;
+      hasNavigated = true;
+    }
+  }
+  if (hasNavigated) {
+    playTone(buzzerPin, 800, 50);
+  }
+  if (!digitalRead(joystickSW)) {
+    playTone(buzzerPin, 1000, 100); 
+  }
+}
+
+void navigateMainMenu() {
+  bool hasNavigated = false; 
+  if (analogRead(joystickY) < 400) {
+    menuIndex--;
+    if (menuIndex < 0) menuIndex = 0;
+    hasNavigated = true;
+    updateMenu();
+  } else if (analogRead(joystickY) > 600) {
+    menuIndex++;
+    if (menuIndex > 3) menuIndex = 3;
+    hasNavigated = true;
+    updateMenu();
+  }
+
+  if (!digitalRead(joystickSW)) {
+    selectMenuItem();
+    hasNavigated = true;
+  }
+
+  if (hasNavigated) {
+    playTone(buzzerPin, 800, 50);
+  }
+}
+
+bool inAdjustmentMode = false;
+
+void navigateSettings() {
+  static unsigned long lastButtonPress = 0; 
+  static unsigned long lastJoystickMove = 0;
+  const unsigned long debounceTime = 200; 
+  const unsigned long joystickInterval = 100; 
+  unsigned long currentMillis = millis();
+  if (!inAdjustmentMode) {
+    if ((currentMillis - lastJoystickMove > joystickInterval) && 
+        (analogRead(joystickY) < 400 || analogRead(joystickY) > 600)) {
+      playTone(buzzerPin, 800, 50);
+      if (analogRead(joystickY) < 400) {
+        settingsIndex--;
+        if (settingsIndex < 0) settingsIndex = 0;
+      } else if (analogRead(joystickY) > 600) {
+        settingsIndex++;
+        if (settingsIndex > 3) settingsIndex = 3;
+      }
+      lastJoystickMove = currentMillis; 
+      updateSettings();
+    }
+
+    if (!digitalRead(joystickSW)) {
+      if (currentMillis - lastButtonPress > debounceTime) {
+        playTone(buzzerPin, 1000, 100);
+        lastButtonPress = currentMillis;
+
+        if (settingsIndex == 2) {
+          soundEnabled = !soundEnabled;
+          EEPROM.put(addressSound, soundEnabled);
+          lcd.clear();
+          lcd.print(soundEnabled ? "Sound ON" : "Sound OFF");
+          lastJoystickMove = currentMillis; 
+        } else if (settingsIndex == 3) {
+          currentMenuState = MAIN_MENU;
+          menuIndex = 0;
+          lastJoystickMove = currentMillis; 
+          updateMenu();
+        } else {
+          inAdjustmentMode = true;
+        }
+      }
+    }
+  } else {
+    adjustSetting();
+  }
+}
+
+
+void playTone(int pin, int frequency, int duration) {
+  if (soundEnabled) {
+    tone(pin, frequency, duration);
+  }
+}
+
+void updateMenu() {
+  clearMatrix();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  if (menuIndex == 0) {
+    lcd.write(byte(0));
+    lcd.print(" 1.Start Game ");
+    lcd.write(byte(1));
+    lcd.setCursor(0, 1);
+    lcd.print("JS Button=Start");
+  } else if (menuIndex == 1) {
+    lcd.write(byte(0));
+    lcd.print("  2.Settings  ");
+    lcd.write(byte(1));
+    lcd.setCursor(0, 1);
+    lcd.print("JS Button=Enter");
+  } else if (menuIndex == 2) {
+    lcd.write(byte(0));
+    lcd.print("3.How To Play ");
+    lcd.write(byte(1));
+    lcd.setCursor(0, 1);
+    lcd.print("JS Button=Enter");
+  } else if (menuIndex == 3) {
+    lcd.write(byte(0));
+    lcd.print("4.Highscores ");
+    lcd.write(byte(1));
+    lcd.setCursor(0, 1);
+    lcd.print("JS Button=Enter");
+  }
+
+
+  if (currentMenuState != GAME) {
+    drawHeart();
+  }
+}
+static unsigned long lastActionTime = 0;
+const long actionInterval = 2000; 
+void selectMenuItem() {
+    unsigned long currentTime = millis();
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    if (currentMenuState == MAIN_MENU) {
+        if (menuIndex == 0) {
+            lcd.print("Starting Game...");
+            if (currentTime - lastActionTime > actionInterval) {
+                currentMenuState = GAME;
+                startGame();
+            }
+        } else if (menuIndex == 1) {
+            lcd.print("Opening Settings");
+            if (currentTime - lastActionTime > actionInterval) {
+                currentMenuState = SETTINGS;
+                settingsIndex = 0; 
+                updateSettings();
+            }
+        } else if(menuIndex == 2) {
+            lcd.print("    Opening ");
+            lcd.setCursor(0, 1);
+            lcd.print("  How To Play");
+            if (currentTime - lastActionTime > actionInterval) {
+                currentMenuState = HOW_TO_PLAY;
+                showHowToPlay();
+            }
+        }
+    }
+    else if (currentMenuState == SETTINGS) {
+        if (settingsIndex == 3) {
+            if (currentTime - lastActionTime > actionInterval) {
+                currentMenuState = MAIN_MENU;
+                menuIndex = 0;
+                updateMenu();
+            }
+        }
+    }
+    if (currentMenuState != MAIN_MENU || (menuIndex != 0 && menuIndex != 1 && menuIndex != 2)) {
+        lastActionTime = currentTime;
+    }
+}
+
+void showHowToPlay() {
+  static unsigned long lastJoystickMoveTime = 0;
+  const unsigned long debounceInterval = 200;
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - lastJoystickMoveTime > debounceInterval) {
+    int yVal = analogRead(joystickY);
+
+    if (yVal < 400) {
+        playTone(buzzerPin, 800, 50); 
+      if (howToPlayPageIndex > 0) {
+        howToPlayPageIndex--;
+      }
+    } else if (yVal > 600) {
+        playTone(buzzerPin, 800, 50);
+      if (howToPlayPageIndex < 3) { 
+        howToPlayPageIndex++;
+      }
+    }
+
+    lastJoystickMoveTime = currentMillis;
+    displayHowToPlayPage(howToPlayPageIndex);
+  }
+  if (!digitalRead(joystickSW) && howToPlayPageIndex == 3) {
+    playTone(buzzerPin, 1000, 100); 
+    delay(500); 
+    currentMenuState = MAIN_MENU;
+    menuIndex = 0;
+    updateMenu();
+  }
+}
+
+void displayHowToPlayPage(int pageIndex) {
+  lcd.clear();
+  switch (pageIndex) {
+    case 0:
+      lcd.print("  Reguli Snake:");
+      lcd.setCursor(0, 1);
+      lcd.print("     1.Move");
+      break;
+    case 1:
+      lcd.print("  2.Colecteaza");
+      lcd.setCursor(0, 1);
+      lcd.print("     fructe");
+      break;
+    case 2:
+      lcd.print("   3.Evita sa ");
+      lcd.setCursor(0, 1);
+      lcd.print(" ranesti sarpele");
+      break;
+    case 3:
+      lcd.print("    4.Exit:");
+      lcd.setCursor(0, 1);
+      lcd.print("  Back To Menu");
+      break;
+  }
+  lcd.setCursor(0, 1);
+}
+void updateSettings() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  
+  switch (settingsIndex) {
+    case 0:
+      lcd.print("     1.LCD  ");
+      lcd.setCursor(0, 1);
+      lcd.print("  Brightness:");
+      lcd.print(lcdBrightness);
+      break;
+    case 1:
+      lcd.print("    2.Matrix ");
+      lcd.setCursor(0, 1);
+      lcd.print("  Brightness:");
+      lcd.print(matrixBrightness);
+      break;
+    case 2:
+      lcd.print("    3.Sound ");
+      lcd.setCursor(0, 1);
+      lcd.print("    : ");
+      lcd.print(soundEnabled ? "ON" : "OFF");
+      break;
+    case 3:
+      lcd.print("    4.Exit ");
+      lcd.setCursor(0, 1);
+      lcd.print("  Back to Menu");
+      break;
+  }
+}
+
+void adjustSetting() {
+  static unsigned long lastPressTime = 0;
+  const unsigned long holdTime = 1000; 
+  if (settingsIndex == 0) {
+    // Ajustare LCD Brightness
+    if (analogRead(joystickY) < 400) {
+      lcdBrightness = max(0, lcdBrightness - 5);
+    } else if (analogRead(joystickY) > 600) {
+      lcdBrightness = min(255, lcdBrightness + 5);
+    }
+    analogWrite(lcdBacklightPin, lcdBrightness);
+  } else if (settingsIndex == 1) {
+    // Ajustare Matrix Brightness
+    if (analogRead(joystickY) < 400) {
+      matrixBrightness = max(0, matrixBrightness - 1);
+    } else if (analogRead(joystickY) > 600) {
+      matrixBrightness = min(15, matrixBrightness + 1);
+    }
+    lc.setIntensity(0, matrixBrightness);
+  }
+  updateSettings();
+  if (!digitalRead(joystickSW)) {
+    if (lastPressTime == 0) {
+      lastPressTime = millis();
+    } else if (millis() - lastPressTime > holdTime) {
+      saveSettingsToEEPROM();
+      lcd.clear();
+      lcd.print("Setari salvate!");
+      delay(2000);
+      inAdjustmentMode = false;
+      currentMenuState = SETTINGS;
+      settingsIndex = 0;
+      lastPressTime = 0;
+    }
+  } else {
+    lastPressTime = 0; 
+  }
+}
+
+
+
+void saveSettingsToEEPROM() {
+  EEPROM.put(addressLCD, lcdBrightness);
+  EEPROM.put(addressMatrix, matrixBrightness);
+  EEPROM.put(addressSound, soundEnabled);
+}
+
+void startGame() {
+  lives = 3;
+  score = 0;
+  highScore = 0;
+  digitalWrite(13, LOW); 
+  digitalWrite(A2, LOW); 
+  lc.clearDisplay(0);   
+
+  initializeGame();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Incercari: ");
+  lcd.print(lives);
+  lcd.setCursor(0, 1);
+  lcd.print("Scor: ");
+  lcd.print(score);
+}
+
+void displayInfoScreen() {
+  clearMatrix();
+  lcd.clear();
+  unsigned long startTime = millis();
+  switch (infoPage) {
+    case 0:
+      lcd.print("    Creator:");
+      lcd.setCursor(0, 1);
+      lcd.print("Dobre Tiberiu-G.");
+      break;
+    case 1:
+      lcd.print("    GitHub:");
+      lcd.setCursor(0, 1);
+      lcd.print("Tibisorul@IntroToRob");
+      break;
+    case 2:
+      lcd.print("   Instagram:  ");
+      lcd.setCursor(0, 1);
+      lcd.print("   Tibisorul");
+      break;
+    case 3:
+      lcd.print(" Tipul jocului:");
+      lcd.setCursor(0, 1);
+      lcd.print("      Snake ");
+      break;
+  }
+  infoPage = (infoPage + 1) % 4; 
+}
+
+void initializeGame() {
+  snakeLength = 1;
+  snake[0].x = matrixSize / 2; 
+  snake[0].y = matrixSize / 2;
+  direction = 1;
+  generateFood();
+  score = 0;
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Incercari:");
+  lcd.setCursor(10, 0);
+  lcd.print(lives);
+  lcd.setCursor(0, 1);
+  lcd.print("Scor:");
+  lcd.setCursor(5, 1);
+  lcd.print(score);
+}
+
+
+void generateFood() {
+  bool isFoodOnSnake;
+  do {
+    isFoodOnSnake = false;
+    food.x = random(matrixSize);
+    food.y = random(matrixSize);
+
+    for (int i = 0; i < snakeLength; i++) {
+      if (snake[i].x == food.x && snake[i].y == food.y) {
+        isFoodOnSnake = true;
+        break;
+      }
+    }
+  } while (isFoodOnSnake);
+}
+
+void updateMoveInterval() {
+  if (score < 3) {
+    moveInterval = 1000;
+  } else if (score < 6) {
+    moveInterval = 800;
+  } else if (score < 9) {
+    moveInterval = 600; 
+  } else {
+    moveInterval = 400;
+  }
+}
+
+unsigned long lastLEDTime = 0;
+const long ledInterval = 100;
+
+void moveSnake() {
+  // Muta coada sarpelui
+  for (int i = snakeLength - 1; i > 0; i--) {
+    snake[i] = snake[i - 1];
+  }
+
+  // Muta capul sarpelui
+  if (direction == 0) snake[0].y--; // Sus
+  else if (direction == 1) snake[0].x++; // Dreapta
+  else if (direction == 2) snake[0].y++; // Jos
+  else if (direction == 3) snake[0].x--; // Stanga
+
+// Verifica coliziunea cu mancarea
+  if (snake[0].x == food.x && snake[0].y == food.y) {
+    snakeLength++;
+    score++;
+    generateFood();
+    updateMoveInterval();
+
+    lastLEDTime = millis(); 
+    digitalWrite(13, HIGH); 
+
+    if (score > highScore) {
+      highScore = score;
+    }
+    playTone(buzzerPin, 1200, 100);
+  }
+
+  if (millis() - lastLEDTime > ledInterval) {
+    digitalWrite(13, LOW);
+  }
+
+  if (snake[0].x < 0 || snake[0].x >= matrixSize || snake[0].y < 0 || snake[0].y >= matrixSize) {
+    lives--;
+    digitalWrite(A2, HIGH);
+    lastLEDTime = millis(); 
+
+    if (lives > 0) {
+      initializeGame(); 
+    } else {
+      gameOver(); 
+      return; 
+    }
+    playTone(buzzerPin, 400, 500);
+  }
+
+  if (millis() - lastLEDTime > ledInterval) {
+    digitalWrite(A2, LOW);
+  }
+  for (int i = 1; i < snakeLength; i++) {
+    if (snake[0].x == snake[i].x && snake[0].y == snake[i].y) {
+      lives--;
+      if (lives > 0) {
+        initializeGame();
+      } else {
+        gameOver(); 
+        return; 
+      }
+      break;
+    }
+  }
+}
+
+void updateDisplay() {
+  // Curata matricea LED
+  for (int i = 0; i < matrixSize; i++) {
+    for (int j = 0; j < matrixSize; j++) {
+      lc.setLed(0, i, j, false);
+    }
+  }
+
+  // Afiseaza sarpele
+  for (int i = 0; i < snakeLength; i++) {
+    lc.setLed(0, snake[i].x, snake[i].y, true);
+  }
+
+  // Afișeaza mancarea
+  lc.setLed(0, food.x, food.y, true);
+
+  // Actualizeaza LCD-ul cu scorul și vietile
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Scor: ");
+  lcd.print(score);
+  lcd.setCursor(0, 1);
+  lcd.print("Vieti: ");
+  lcd.print(lives);
+}
+
+void gameOver() {
+  static unsigned long gameOverStartTime = 0;
+  const unsigned long gameOverDuration = 5000; 
+  if (gameOverStartTime == 0) {
+    lcd.clear();
+    lcd.print("Game Over!");
+    lcd.setCursor(0, 1);
+    lcd.print("Scor final: ");
+    lcd.print(highScore);
+
+    updateHighscores(nickname, score);
+  
+    digitalWrite(13, LOW);
+    digitalWrite(A2, LOW); 
+    for (int i = 0; i < matrixSize; i++) {
+      for (int j = 0; j < matrixSize; j++) {
+        lc.setLed(0, i, j, false);
+      }
+    }
+
+    gameOverStartTime = millis(); 
+  }
+  if (millis() - gameOverStartTime > gameOverDuration) {
+    currentMenuState = MAIN_MENU;
+    updateMenu();
+    gameOverStartTime = 0; 
+  }
+}
+
+
+void clearMatrix() {
+  for (int i = 0; i < matrixSize; i++) {
+    for (int j = 0; j < matrixSize; j++) {
+      lc.setLed(0, i, j, false);
+    }
+  }
+}
+
+void drawHeart() {
+  byte heart[8] = {
+    B00000000,
+    B01100110,
+    B11111111,
+    B11111111,
+    B11111111,
+    B01111110,
+    B00111100,
+    B00011000
+  };
+  for (int row = 0; row < 8; row++) {
+    for (int col = 0; col < 8; col++) {
+      lc.setLed(0, row, col, bitRead(heart[row], col));
+    }
+  }
+}
+
+void enterNickname() {
+    const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const int numChars = sizeof(chars) - 1;
+    int charIndex = 0;
+    int nicknameLength = 0;
+    unsigned long lastUpdate = 0;
+    const unsigned long updateInterval = 200;
+
+    lcd.clear();
+    lcd.print("Nickname: ");
+    lcd.setCursor(0, 1);
+    lastInputTime = millis();
+
+    while (nicknameLength < 9 && !nicknameEntered) {
+        unsigned long currentTime = millis();
+
+        if (currentTime - lastUpdate > updateInterval) {
+            int xVal = analogRead(joystickX);
+
+            if ((xVal < 400 || xVal > 600) && !nicknameEntered) {
+                if (xVal < 400) { 
+                    charIndex--;
+                    if (charIndex < 0) charIndex = numChars - 1;
+                } else if (xVal > 600) {
+                    charIndex++;
+                    if (charIndex >= numChars) charIndex = 0;
+                }
+                lastInputTime = millis();
+                lastUpdate = currentTime;
+            }
+
+            lcd.setCursor(nicknameLength, 1);
+            lcd.print(chars[charIndex]);
+
+            if (!digitalRead(joystickSW) && !nicknameEntered) {
+                nickname[nicknameLength++] = chars[charIndex];
+                lcd.setCursor(nicknameLength, 1);
+                lcd.print('_'); 
+                lastUpdate = currentTime;
+            }
+        }
+
+        if (!nicknameEntered && millis() - lastInputTime > inputTimeout) {
+            lcd.clear();
+            lcd.print("Hold btn to save");
+            lcd.setCursor(0, 1);
+            lcd.print(nickname);
+            nicknameEntered = true; 
+            lastUpdate = currentTime;
+        }
+    }
+    nickname[nicknameLength] = '\0'; 
+}
+
+void confirmNickname(const char* nickname) {
+    lcd.clear();
+    lcd.print("Confirm Nick:");
+    lcd.setCursor(0, 1);
+    lcd.print(nickname);
+    lcd.setCursor(0, 2);
+    lcd.print("Hold btn to save");
+
+    unsigned long lastButtonPressTime = 0;
+    const unsigned long buttonHoldTime = 2000; 
+    while (true) {
+        if (digitalRead(joystickSW) == LOW) { 
+            if (lastButtonPressTime == 0) { 
+                lastButtonPressTime = millis();
+            } else if (millis() - lastButtonPressTime > buttonHoldTime) {
+                for (int i = 0; i < 10; i++) {
+                    EEPROM.update(NICKNAME_ADDRESS + i, nickname[i]);
+                    if (nickname[i] == '\0') break; 
+                }
+                lcd.clear();
+                lcd.print("Nickname salvat!");
+                delay(2000);
+                return;
+            }
+        } else {
+            lastButtonPressTime = 0;
+        }
+    }
+}
+
+void initializeHighscores() {
+  for (int i = 0; i < 5; i++) { 
+    EEPROM.get(i * sizeof(Highscore), highscores[i]);
+    if (!highscores[i].isSet) { 
+      strcpy(highscores[i].nickname, "N/A");
+      highscores[i].score = 0;
+      highscores[i].isSet = false;
+    }
+  }
+}
+
+void updateHighscores(const char* nickname, int newScore) {
+    int i;
+    for (i = 0; i < 5; i++) {
+        if (newScore > highscores[i].score) {
+            break;
+        }
+    }
+
+    if (i < 5) {
+        for (int j = 4; j > i; j--) {
+            highscores[j] = highscores[j - 1];
+        }
+        highscores[i].score = newScore;
+        strncpy(highscores[i].nickname, nickname, 9);
+        highscores[i].nickname[9] = '\0';
+        highscores[i].isSet = true;
+        for (int k = 0; k < 5; k++) {
+            EEPROM.put(k * sizeof(Highscore), highscores[k]);
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
