@@ -42,6 +42,7 @@ Mai jos voi prezenta video functionalitate joculetului meu:
  - In timp ce cresc luminozitatea matricei, scade luminozitatea LCD-ului.
  - Daca nu se alege corect si in timp util numele utilizatorului, nu mai merge butonul Joystick-ului atunci cand doresti sa selectezi o optiune din meniu.
  - Bug-ul la optiunea Highscore mentionat mai sus in categoria "Prezentarea functionalitatilor".
+ - Cateodata nu doreste sa imi afiseze jocul din matrice, decat daca repornesc codul sau daca rulez alt cod diferit si il rulez pe acesta
  - (?)Daca la alegerea numelui nu selectezi niciun caracter, va interveni mesajul de "Hold btn to save".
  - (?)Informatiile de tip AFK pot fi neplacute, in sensul ca s-ar putea sa apara cand nu este nevoie.
 
