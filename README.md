@@ -33,6 +33,9 @@ Mai jos voi prezenta video functionalitate joculetului meu:
 
 ### [YouTube Video Showcase](https://www.youtube.com/watch?v=mD_BZTL-Vys) 
 
+> [!NOTE]  
+> Pentru a nu risca depunctarea, domnul profesor de la curs ne-a rugat sa mentionam sursele bibliografice sau de unde ne-am inspirat. Mentionez faptul ca nu m-am inspirat de la niciun coleg din anii trecuti sau din anul actual, ci doar am fost ajutat de AI, si anume ChatGPT acolo unde a fost cazul.
+
 
 #### Bug-uri intalnite:
  - Atunci cand sarpele mananca fructul, se aprinde random, dar temporar un LED pe matrice.
@@ -42,8 +45,7 @@ Mai jos voi prezenta video functionalitate joculetului meu:
  - (?)Daca la alegerea numelui nu selectezi niciun caracter, va interveni mesajul de "Hold btn to save".
  - (?)Informatiile de tip AFK pot fi neplacute, in sensul ca s-ar putea sa apara cand nu este nevoie.
 
-Pentru a nu risca depunctarea, domnul profesor de la curs ne-a rugat sa mentionam sursele bibliografice sau de unde ne-am inspirat. Mentionez faptul ca nu m-am inspirat de la niciun coleg din anii trecuti sau din anul actual, ci doar am fost ajutat de AI, si anume ChatGPT acolo unde a fost cazul.
-Bibliografie: 
+
  
 
 
