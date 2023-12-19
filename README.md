@@ -41,6 +41,9 @@ Mai jos voi prezenta video functionalitate joculetului meu:
  - Bug-ul la optiunea Highscore mentionat mai sus in categoria "Prezentarea functionalitatilor".
  - (?)Daca la alegerea numelui nu selectezi niciun caracter, va interveni mesajul de "Hold btn to save".
  - (?)Informatiile de tip AFK pot fi neplacute, in sensul ca s-ar putea sa apara cand nu este nevoie.
+
+Pentru a nu risca depunctarea, domnul profesor de la curs ne-a rugat sa mentionam sursele bibliografice sau de unde ne-am inspirat. Mentionez faptul ca nu m-am inspirat de la niciun coleg din anii trecuti sau din anul actual, ci doar am fost ajutat de AI, si anume ChatGPT acolo unde a fost cazul.
+Bibliografie: 
  
 
 
