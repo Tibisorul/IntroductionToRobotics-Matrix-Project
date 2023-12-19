@@ -1,0 +1,1005 @@
+#include <EEPROM.h>
+#include <LedControl.h>
+#include <LiquidCrystal.h>
+
+// # LCD
+const byte rs = 9;
+const byte en = 8;
+const byte d4 = 7;
+const byte d5 = 6;
+const byte d6 = 5;
+const byte d7 = 4;
+const byte lcdBacklightPin = 3; // PWM
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+// # Matrix LED 8x8
+const byte dinPin = 12;
+const byte clockPin = 11;
+const byte loadPin = 10;
+const byte matrixSize = 8;
+LedControl lc = LedControl(dinPin, clockPin, loadPin, 1);
+
+
+// # Joystick
+const int joystickX = A0;
+const int joystickY = A1;
+const int joystickSW = 2;
+
+// Definirea starilor pentru meniu
+enum MenuState {
+  MAIN_MENU,
+  GAME,
+  SETTINGS,
+  AFK,
+  HOW_TO_PLAY,
+  HIGHSCORES
+};
+
+MenuState currentMenuState = MAIN_MENU;
+
+int menuIndex = 0;
+int settingsIndex = 0;
+
+// AFK
+unsigned long lastActivityTime = millis(); // Ultima data cand s-a detectat activitate
+const unsigned long afkTimeout = 10000; // Timpul de inactivitate în milisecunde pentru a intra in modul AFK (10 secunde)
+int infoPage = 0; // Pagina curentă pentru informațiile AFK
+
+// Caractere personalizate pentru sageti
+byte RightArrow[] = {
+  B00011,
+  B00110,
+  B01100,
+  B11000,
+  B11000,
+  B01100,
+  B00110,
+  B00011
+};
+
+byte LeftArrow[] = {
+  B11000,
+  B01100,
+  B00110,
+  B00011,
+  B00011,
+  B00110,
+  B01100,
+  B11000
+};
+
+
+// Variabile pentru Jocul Snake:
+
+unsigned long lastMoveTime = 0;
+unsigned long moveInterval = 1000; // intervalul initial în milisecunde
+
+
+
+struct Point {
+  int x;
+  int y;
+};
+
+Point snake[64]; // Presupunand o lungime maxima a sarpelui de 64
+int snakeLength;
+Point food;
+int direction; // 0: sus, 1: dreapta, 2: jos, 3: stânga
+int score = 0;
+int lives = 3;
+int highScore = 0;
+const int buzzerPin = A3;
+
+// Variabile Brightness
+int lcdBrightness = 50; // Luminozitatea LCD
+int matrixBrightness = 50; // Luminozitatea matricei LED
+
+// Adrese pentru stocare adrese EEPROM
+const int addressLCD = 0;
+const int addressMatrix = sizeof(lcdBrightness);
+
+// Variabile pentru Sound
+bool soundEnabled = true; 
+const int addressSound = addressMatrix + sizeof(matrixBrightness); // Adresa pentru starea sunetului în EEPROM
+
+// Variabila pentru Sectiunea "How To Play"
+
+int howToPlayPageIndex = 0;
+
+// Adresa in EEPROM
+const int NICKNAME_ADDRESS = 10; 
+bool firstStart = true;
+bool confirmInProgress = false;
+
+char nickname[10]; // Presupunem un nickname de maxim 9 caractere + terminatorul NULL
+unsigned long lastInputTime = 0;
+const unsigned long inputTimeout = 3000; // 3 secunde de inactivitate pentru login
+bool nicknameEntered = false;
+
+struct Highscore {
+  char nickname[10]; // Presupunem un nickname de maxim 9 caractere + terminatorul NULL
+  int score;
+  bool isSet;
+};
+
+Highscore highscores[5];
+
+
+
+void setup() {
+  // Initializarea hardware-ului
+  lc.shutdown(0, false);
+  lc.setIntensity(0, 8);
+  lc.clearDisplay(0);
+  lcd.begin(16, 2);
+  lcd.createChar(0, RightArrow);
+  lcd.createChar(1, LeftArrow);
+  analogWrite(lcdBacklightPin, 255);
+  pinMode(joystickSW, INPUT_PULLUP);
+  pinMode(13, OUTPUT);
+  pinMode(A2, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+
+  // Incarcarea setarilor din EEPROM
+  EEPROM.get(addressLCD, lcdBrightness);
+  EEPROM.get(addressMatrix, matrixBrightness);
+  EEPROM.get(addressSound, soundEnabled);
+  analogWrite(lcdBacklightPin, lcdBrightness);
+  lc.setIntensity(0, matrixBrightness);
+
+  // Initializarea Serial si afisarea highscores-urilor pentru debug
+  Serial.begin(9600);
+  for (int i = 0; i < 5; i++) {
+    EEPROM.get(i * sizeof(Highscore), highscores[i]);
+    Serial.print("Highscore ");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.print(highscores[i].nickname);
+    Serial.print(" - ");
+    Serial.println(highscores[i].score);
+  }
+
+  // Apelarea initializeHighscores
+  initializeHighscores();
+
+  // Restul inițializărilor
+  displayIntro();
+  updateMenu();
+  drawHeart();
+}
+
+
+void displayIntro() {
+  lcd.clear();
+  delay(100);
+  lcd.print(" Bine ati venit");
+  lcd.setCursor(0, 1); 
+  lcd.print("  in labirint!");
+  delay(3000); 
+
+  lcd.clear();
+  lcd.print("  Realizat de:");
+  lcd.setCursor(0, 1);
+  lcd.print("Dobre Tiberiu-G.");
+  delay(3000); 
+
+  lcd.clear();
+  lcd.print(" Grupa 364, CTI");
+  lcd.setCursor(0,1);
+  lcd.print("   Unibuc FMI");
+  delay(3000); 
+
+  lcd.clear();
+  lastActivityTime = millis();
+}
+
+void showHighscores() {
+    lcd.clear();
+    lcd.print("Top Scoruri:");
+
+    for (int i = 0; i < 5; i++) {
+        if (highscores[i].isSet) { // Verifica daca scorul a fost setat
+            int line = i % 2;
+            lcd.setCursor(0, line);
+            lcd.print(i + 1);
+            lcd.print(". ");
+            lcd.print(highscores[i].nickname);
+            lcd.print(": ");
+            lcd.print(highscores[i].score);
+
+            if (line == 1 || i == 4) {
+                delay(2000);
+                lcd.clear();
+            }
+        }
+    }
+
+    currentMenuState = MAIN_MENU; // Resetare la meniul principal
+    updateMenu();
+}
+
+
+  
+void loop() {
+  static unsigned long lastTime = 0;
+  static unsigned long lastAFKUpdateTime = 0;
+  unsigned long currentTime = millis();
+
+    // Debouncing pentru a evita citiri multiple rapide
+    if (currentTime - lastTime > 200) {
+        // Daca a fost miscat joystick-ul, informatiile de tip AFK se reseteaza.
+        if (analogRead(joystickY) < 400 || analogRead(joystickY) > 600 || digitalRead(joystickSW) == LOW) {
+            lastActivityTime = currentTime;
+            if (currentMenuState == AFK) {
+                currentMenuState = MAIN_MENU;
+                updateMenu();
+            }
+        }
+
+        // Afisarea informatiilor de tip AFK
+        if (currentMenuState != GAME && currentMenuState != AFK && currentTime - lastActivityTime > afkTimeout) {
+            currentMenuState = AFK;
+            infoPage = 0;
+            displayInfoScreen();
+        }
+
+        
+        switch (currentMenuState) {
+            case MAIN_MENU:
+                navigateMainMenu();
+                break;
+            case SETTINGS:
+                navigateSettings();
+                break;
+            case GAME:
+                handleJoystick();
+                if (currentTime - lastMoveTime > moveInterval) {
+                    moveSnake();
+                    updateDisplay();
+                    lastMoveTime = currentTime;
+                }
+                break;
+            case AFK:
+                if (currentTime - lastAFKUpdateTime > 2000) {
+                    displayInfoScreen();
+                    lastAFKUpdateTime = currentTime;
+                }
+                break;
+            case HOW_TO_PLAY:
+                showHowToPlay();
+                break;
+            case HIGHSCORES:
+                initializeHighscores();
+                showHighscores();
+                break;
+        }
+
+        lastTime = currentTime;
+    }
+
+    // Introducerea nickname-ului
+    if (firstStart && !nicknameEntered) {
+        enterNickname();
+    } else if (firstStart && nicknameEntered && digitalRead(joystickSW) == LOW) {
+        unsigned long pressTime = millis();
+        while (digitalRead(joystickSW) == LOW) {
+            if (millis() - pressTime > 2000) { // Apasare prelunga
+                // Salvare nickname în EEPROM
+                for (int i = 0; i < 10; i++) {
+                    EEPROM.update(NICKNAME_ADDRESS + i, nickname[i]);
+                    if (nickname[i] == '\0') break; // Incheie bucla daca intalneste terminatorul de șir
+                }
+                firstStart = false;
+                lcd.clear();
+                lcd.print("Nickname salvat!");
+                delay(2000);
+                updateMenu();
+                break;
+            }
+        }
+    }
+}
+
+
+void handleJoystick() {
+  int xVal = analogRead(joystickX);
+  int yVal = analogRead(joystickY);
+  bool hasNavigated = false;
+
+  if (xVal < 400 || xVal > 600 || yVal < 400 || yVal > 600) {
+    lastActivityTime = millis(); // Actualizeaza timpul de activitate
+
+    
+    if (xVal < 400 && direction != 3) {
+      direction = 1; // Dreapta
+      hasNavigated = true;
+    } else if (xVal > 600 && direction != 1) {
+      direction = 3; // Stânga
+      hasNavigated = true;
+    }
+
+    if (yVal < 400 && direction != 2) {
+      direction = 0; // Sus
+      hasNavigated = true;
+    } else if (yVal > 600 && direction != 0) {
+      direction = 2; // Jos
+      hasNavigated = true;
+    }
+  }
+
+  // Sunet pentru navigarea in meniu atunci cand manipulam joystick-ul
+  if (hasNavigated) {
+    playTone(buzzerPin, 800, 50); 
+  }
+
+  // Sunet pentru apăsarea butonului
+  if (!digitalRead(joystickSW)) {
+    playTone(buzzerPin, 1000, 100); 
+  }
+}
+
+
+void navigateMainMenu() {
+  bool hasNavigated = false; 
+
+  if (analogRead(joystickY) < 400) {
+    // Joystick miscat in sus
+    menuIndex--;
+    if (menuIndex < 0) menuIndex = 0;
+    hasNavigated = true;
+    updateMenu();
+  } else if (analogRead(joystickY) > 600) {
+    // Joystick miscat in jos
+    menuIndex++;
+    if (menuIndex > 3) menuIndex = 3;
+    hasNavigated = true;
+    updateMenu();
+  }
+
+  if (!digitalRead(joystickSW)) {
+    // Joystick-ul butonului apasat.
+    selectMenuItem();
+    hasNavigated = true;
+  }
+
+  if (hasNavigated) {
+    playTone(buzzerPin, 800, 50); 
+  }
+}
+
+  bool inAdjustmentMode = false; // ajuta la ajutarea luminozitatii si  salvarea setarilor
+
+  void navigateSettings() {
+    // Debouncing pentru butonul joystick
+    static unsigned long lastButtonPress = 0;
+    const unsigned long debounceTime = 200; 
+
+    if (!inAdjustmentMode) {
+      // Navigație în meniu
+      if (analogRead(joystickY) < 400) {
+        playTone(buzzerPin, 800, 50);
+        settingsIndex--;
+        if (settingsIndex < 0) settingsIndex = 0;
+        updateSettings();
+      } else if (analogRead(joystickY) > 600) {
+        playTone(buzzerPin, 800, 50);
+        settingsIndex++;
+        if (settingsIndex > 3) settingsIndex = 3;
+        updateSettings();
+      }
+
+      if (!digitalRead(joystickSW)) {
+        playTone(buzzerPin, 1000, 100);
+        unsigned long currentMillis = millis();
+        if (currentMillis - lastButtonPress > debounceTime) {
+          lastButtonPress = currentMillis;
+
+          if (settingsIndex == 2) {
+            soundEnabled = !soundEnabled;
+            Serial.print("Sound state changed to: "); // Tentativa debug prin serial
+            Serial.println(soundEnabled ? "ON" : "OFF");
+            EEPROM.put(addressSound, soundEnabled); // Salveaza sunetul în EEPROM
+            lcd.clear();
+            lcd.print(soundEnabled ? "Sound ON" : "Sound OFF");
+            delay(1000);
+            updateSettings();
+          } else if (settingsIndex == 3) {
+            // Iesire in meniul principal
+            currentMenuState = MAIN_MENU;
+            menuIndex = 0; 
+            updateMenu();
+          } else {
+            inAdjustmentMode = true; // Intră în modul de ajustare
+          }
+        }
+      }
+    } else {
+      // Ajustare luminozitate și salvare setări
+      adjustSetting();
+    }
+  }
+
+void playTone(int pin, int frequency, int duration) {
+  if (soundEnabled) {
+    tone(pin, frequency, duration);
+  }
+}
+
+void updateMenu() {
+  clearMatrix();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  
+  // Verifica indexul meniului si afiseaza optiunea corespunzatoare
+  if (menuIndex == 0) {
+    lcd.write(byte(0));
+    lcd.print(" 1.Start Game ");
+    lcd.write(byte(1));
+    lcd.setCursor(0, 1);
+    lcd.print("JS Button=Start");
+  } else if (menuIndex == 1) {
+    lcd.write(byte(0));
+    lcd.print("  2.Settings  ");
+    lcd.write(byte(1));
+    lcd.setCursor(0, 1);
+    lcd.print("JS Button=Enter");
+  } else if (menuIndex == 2) {
+    lcd.write(byte(0));
+    lcd.print("3.How To Play ");
+    lcd.write(byte(1));
+    lcd.setCursor(0, 1);
+    lcd.print("JS Button=Enter");
+  } else if (menuIndex == 3) {
+    lcd.write(byte(0));
+    lcd.print("4.Highscores ");
+    lcd.write(byte(1));
+    lcd.setCursor(0, 1);
+    lcd.print("JS Button=Enter");
+  }
+
+
+  if (currentMenuState != GAME) {
+    drawHeart(); // Deseneaza inima daca nu sunt în joc
+  }
+}
+
+
+void selectMenuItem() {
+  // Functie de selectare a optiunilor
+  lcd.clear();
+  lcd.setCursor(0, 0);
+
+  if (currentMenuState == MAIN_MENU) {
+    if (menuIndex == 0) {
+      lcd.print("Starting Game...");
+      delay(2000);
+      currentMenuState = GAME;
+      startGame();
+    } else if (menuIndex == 1) {
+      lcd.print("Opening Settings");
+      delay(2000);
+      currentMenuState = SETTINGS;
+      settingsIndex = 0;
+      updateSettings();
+    } else if(menuIndex == 2) {
+      lcd.print("    Opening ");
+      lcd.setCursor(0, 1);
+      lcd.print("  How To Play");
+      delay(2000);
+      currentMenuState = HOW_TO_PLAY;
+      showHowToPlay();
+    }
+  }
+  
+// Daca suntem in meniul setari
+  else if (currentMenuState == SETTINGS) {
+    if (settingsIndex == 3) {
+      currentMenuState = MAIN_MENU;
+      menuIndex = 0;
+      updateMenu();
+    }
+  }
+}
+
+void showHowToPlay() {
+  static unsigned long lastJoystickMoveTime = 0;
+  const unsigned long debounceInterval = 200;
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - lastJoystickMoveTime > debounceInterval) {
+    int yVal = analogRead(joystickY);
+
+    if (yVal < 400) {
+        playTone(buzzerPin, 800, 50); // Joystick miscat în sus
+      if (howToPlayPageIndex > 0) {
+        howToPlayPageIndex--;
+      }
+    } else if (yVal > 600) {
+        playTone(buzzerPin, 800, 50); // Joystick miscat în jos
+      if (howToPlayPageIndex < 3) { 
+        howToPlayPageIndex++;
+      }
+    }
+
+    lastJoystickMoveTime = currentMillis;
+    displayHowToPlayPage(howToPlayPageIndex); // Afisarea paginii
+  }
+
+  if (!digitalRead(joystickSW) && howToPlayPageIndex == 3) {
+    playTone(buzzerPin, 1000, 100); // Exit pe ultima pagina
+    delay(500); // Debounce pentru buton
+    currentMenuState = MAIN_MENU;
+    menuIndex = 0;
+    updateMenu();
+  }
+}
+
+void displayHowToPlayPage(int pageIndex) {
+  lcd.clear();
+  switch (pageIndex) {
+    case 0:
+      lcd.print("  Reguli Snake:");
+      lcd.setCursor(0, 1);
+      lcd.print("     1.Move");
+      break;
+    case 1:
+      lcd.print("  2.Colecteaza");
+      lcd.setCursor(0, 1);
+      lcd.print("     fructe");
+      break;
+    case 2:
+      lcd.print("   3.Evita sa ");
+      lcd.setCursor(0, 1);
+      lcd.print(" ranesti sarpele");
+      break;
+    case 3:
+      lcd.print("    4.Exit:");
+      lcd.setCursor(0, 1);
+      lcd.print("  Back To Menu");
+      break;
+  }
+  lcd.setCursor(0, 1);
+}
+
+void updateSettings() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  
+  switch (settingsIndex) {
+    case 0:
+      lcd.print("     1.LCD  ");
+      lcd.setCursor(0, 1);
+      lcd.print("  Brightness:");
+      lcd.print(lcdBrightness);
+      break;
+    case 1:
+      lcd.print("    2.Matrix ");
+      lcd.setCursor(0, 1);
+      lcd.print("  Brightness:");
+      lcd.print(matrixBrightness);
+      break;
+    case 2:
+      lcd.print("    3.Sound ");
+      lcd.setCursor(0, 1);
+      lcd.print("    : ");
+      lcd.print(soundEnabled ? "ON" : "OFF");
+      break;
+    case 3:
+      lcd.print("    4.Exit ");
+      lcd.setCursor(0, 1);
+      lcd.print("  Back to Menu");
+      break;
+  }
+}
+
+void adjustSetting() {
+  if (settingsIndex == 0) {
+    // Ajustare LCD Brightness
+    if (analogRead(joystickY) < 400) {
+      lcdBrightness = max(0, lcdBrightness - 5);
+    } else if (analogRead(joystickY) > 600) {
+      lcdBrightness = min(255, lcdBrightness + 5);
+    }
+    analogWrite(lcdBacklightPin, lcdBrightness);
+  } else if (settingsIndex == 1) {
+    // Ajustare Matrix Brightness
+    if (analogRead(joystickY) < 400) {
+      matrixBrightness = max(0, matrixBrightness - 1);
+    } else if (analogRead(joystickY) > 600) {
+      matrixBrightness = min(15, matrixBrightness + 1);
+    }
+    lc.setIntensity(0, matrixBrightness);
+  }
+
+  // Actualizarea  afisajului cu noua valoare
+  updateSettings();
+
+  // Apasare prelunga pentru salvarea setarilor
+  if (!digitalRead(joystickSW)) {
+    unsigned long pressTime = millis();
+    while (!digitalRead(joystickSW)) {
+      if (millis() - pressTime > 1000) {  // Apasarea prelunga dureaza o secunda
+        saveSettingsToEEPROM();
+        lcd.clear();
+        lcd.print("Setari salvate!");
+        delay(2000);
+        inAdjustmentMode = false;
+        currentMenuState = SETTINGS;
+        settingsIndex = 0; 
+        updateSettings();
+        break;
+      }
+    }
+  }
+}
+
+
+void saveSettingsToEEPROM() {
+  // Salvarea setarilor in EEPROM
+  EEPROM.put(addressLCD, lcdBrightness);
+  EEPROM.put(addressMatrix, matrixBrightness);
+  EEPROM.put(addressSound, soundEnabled);
+}
+
+void startGame() {
+  lives = 3;
+  score = 0;
+  highScore = 0;
+
+  
+  digitalWrite(13, LOW); // Oprire LED-ul verde
+  digitalWrite(A2, LOW); // Oprire LED-ul roșu
+  lc.clearDisplay(0);    // Oprire matricea LED
+
+  initializeGame();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Incercari: ");
+  lcd.print(lives);
+  lcd.setCursor(0, 1);
+  lcd.print("Scor: ");
+  lcd.print(score);
+}
+
+void displayInfoScreen() {
+  clearMatrix();
+  lcd.clear();
+  unsigned long startTime = millis();
+  switch (infoPage) {
+    case 0:
+      lcd.print("    Creator:");
+      lcd.setCursor(0, 1);
+      lcd.print("Dobre Tiberiu-G.");
+      break;
+    case 1:
+      lcd.print("    GitHub:");
+      lcd.setCursor(0, 1);
+      lcd.print("Tibisorul@IntroToRob");
+      break;
+    case 2:
+      lcd.print("   Instagram:  ");
+      lcd.setCursor(0, 1);
+      lcd.print("   Tibisorul");
+      break;
+    case 3:
+      lcd.print(" Tipul jocului:");
+      lcd.setCursor(0, 1);
+      lcd.print("      Snake ");
+      break;
+  }
+  infoPage = (infoPage + 1) % 4; // Revenire la 0 dupa a treia pagina
+}
+
+void initializeGame() {
+  // Reinitializare lungimea sarpelui
+  snakeLength = 1;
+  snake[0].x = matrixSize / 2; // Sarpele incepe de la mijloc
+  snake[0].y = matrixSize / 2;
+
+  // Merge initial spre dreapta.
+  direction = 1;
+  generateFood();
+  score = 0;
+
+  // Actualizeaza LCD-ul cu numarul de vieti si scor
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Incercari:");
+  lcd.setCursor(10, 0);
+  lcd.print(lives);
+  lcd.setCursor(0, 1);
+  lcd.print("Scor:");
+  lcd.setCursor(5, 1);
+  lcd.print(score);
+}
+
+
+void generateFood() {
+  bool isFoodOnSnake;
+  do {
+    isFoodOnSnake = false;
+    food.x = random(matrixSize);
+    food.y = random(matrixSize);
+
+    // Verificare daca mancarea nu este pe pozitia sarpelui.
+    for (int i = 0; i < snakeLength; i++) {
+      if (snake[i].x == food.x && snake[i].y == food.y) {
+        isFoodOnSnake = true;
+        break;
+      }
+    }
+  } while (isFoodOnSnake);
+}
+
+void updateMoveInterval() {
+  // Sarpele isi schimba viteza o data cu avansarea in scor
+  if (score < 3) {
+    moveInterval = 1000; // miscare normala
+  } else if (score < 6) {
+    moveInterval = 800; // miscare mai rapida
+  } else if (score < 9) {
+    moveInterval = 600; // si mai rapida
+  } else {
+    moveInterval = 400; // maxima viteza
+  }
+}
+
+
+void moveSnake() {
+  // Muta coada sarpelui
+  for (int i = snakeLength - 1; i > 0; i--) {
+    snake[i] = snake[i - 1];
+  }
+
+  // Muta capul sarpelui
+  if (direction == 0) snake[0].y--; // Sus
+  else if (direction == 1) snake[0].x++; // Dreapta
+  else if (direction == 2) snake[0].y++; // Jos
+  else if (direction == 3) snake[0].x--; // Stânga
+
+  // Verificare coliziunea cu mancarea
+  if (snake[0].x == food.x && snake[0].y == food.y) {
+    snakeLength++;
+    score++;
+    generateFood();
+    updateMoveInterval();
+    digitalWrite(13, HIGH);
+    delay(100); // Daca sarpele prinde miscare tine led-ul verde aprins pentru o scurta perioada
+    digitalWrite(13, LOW);
+    if (score > highScore) {
+      highScore = score;
+    }
+    playTone(buzzerPin, 1200, 100);
+  }
+
+  // Verificare coliziunea cu marginile
+  if (snake[0].x < 0 || snake[0].x >= matrixSize || snake[0].y < 0 || snake[0].y >= matrixSize) {
+    // Jocul s-a terminat
+    lives--;
+    digitalWrite(A2, HIGH);
+    delay(1000); // Se aprinde led-ul rosu pentru o perioada atunci cand sarpele se loveste.
+    digitalWrite(A2, LOW);
+    if (lives > 0) {
+      initializeGame(); // Reincepe jocul
+    } else {
+      gameOver(); // Afiseaza ecranul final si incheie jocul
+      return; 
+    }
+    playTone(buzzerPin, 400, 500);
+  }
+
+  // Verificare coliziune cu corpul sarpelui
+  for (int i = 1; i < snakeLength; i++) {
+    if (snake[0].x == snake[i].x && snake[0].y == snake[i].y) {
+      lives--;
+      if (lives > 0) {
+        initializeGame(); // Reincepe jocul
+      } else {
+        gameOver(); // Afiseaza ecranul final si incheie jocul
+        return; 
+      }
+      break;
+    }
+  }
+}
+
+void updateDisplay() {
+  // Curațare matricea LED
+  for (int i = 0; i < matrixSize; i++) {
+    for (int j = 0; j < matrixSize; j++) {
+      lc.setLed(0, i, j, false);
+    }
+  }
+
+  // Afisare sarpe
+  for (int i = 0; i < snakeLength; i++) {
+    lc.setLed(0, snake[i].x, snake[i].y, true);
+  }
+
+  // Afisare mancare
+  lc.setLed(0, food.x, food.y, true);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Scor: ");
+  lcd.print(score);
+  lcd.setCursor(0, 1);
+  lcd.print("Vieti: ");
+  lcd.print(lives);
+}
+
+void gameOver() {
+  // Mesajul de sfarsit de joc
+  lcd.clear();
+  lcd.print("Game Over!");
+  lcd.setCursor(0, 1);
+  lcd.print("Scor final: ");
+  lcd.print(highScore);
+
+  updateHighscores(nickname,score);
+
+  // Oprire LED-uri 
+  digitalWrite(13, LOW); 
+  digitalWrite(A2, LOW); 
+
+   // Oprire fiecare LED din matricea LED
+  for (int i = 0; i < matrixSize; i++) {
+    for (int j = 0; j < matrixSize; j++) {
+      lc.setLed(0, i, j, false);
+    }
+  }
+
+  delay(5000); 
+  currentMenuState = MAIN_MENU;
+  updateMenu(); 
+  
+}
+
+void clearMatrix() {
+  for (int i = 0; i < matrixSize; i++) {
+    for (int j = 0; j < matrixSize; j++) {
+      lc.setLed(0, i, j, false);
+    }
+  }
+}
+
+void drawHeart() {
+  // Inima care este afisata in timpul navigarii meniului.
+  byte heart[8] = {
+    B00000000,
+    B01100110,
+    B11111111,
+    B11111111,
+    B11111111,
+    B01111110,
+    B00111100,
+    B00011000
+  };
+  for (int row = 0; row < 8; row++) {
+    for (int col = 0; col < 8; col++) {
+      lc.setLed(0, row, col, bitRead(heart[row], col));
+    }
+  }
+}
+
+void enterNickname() {
+    const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const int numChars = sizeof(chars) - 1;
+    int charIndex = 0;
+    int nicknameLength = 0;
+
+    lcd.clear();
+    lcd.print("Nickname: ");
+    lcd.setCursor(0, 1);
+
+    lastInputTime = millis(); // Initializaare lastInputTime la începutul introducerii nickname-ului
+
+    while (nicknameLength < 9 && !nicknameEntered) { // Daca nickname a fost introdus
+        int xVal = analogRead(joystickX);
+
+        if ((xVal < 400 || xVal > 600) && !nicknameEntered) { 
+            // Navigare in setul de caractere
+            if (xVal < 400) { //  Stanga
+                charIndex--;
+                if (charIndex < 0) charIndex = numChars - 1;
+                delay(200); 
+            } else if (xVal > 600) { // Dreapta
+                charIndex++;
+                if (charIndex >= numChars) charIndex = 0;
+                delay(200); // Incetinire navigare
+            }
+            lastInputTime = millis();
+        }
+
+        lcd.setCursor(nicknameLength, 1);
+        lcd.print(chars[charIndex]);
+
+        if (!digitalRead(joystickSW) && !nicknameEntered) { 
+            // Adaugarea caracterului in nickname
+            nickname[nicknameLength++] = chars[charIndex];
+            lcd.setCursor(nicknameLength, 1);
+            lcd.print('_'); // Urmatorul spatiu pentru caracter
+            delay(200); // 
+        }
+
+        if (!nicknameEntered && millis() - lastInputTime > inputTimeout) {
+            lcd.clear();
+            lcd.print("Hold btn to save");
+            lcd.setCursor(0, 1);
+            lcd.print(nickname);
+            nicknameEntered = true; // Mesajul de salvare a fost afisat
+        }
+
+        delay(100); 
+    }
+    nickname[nicknameLength] = '\0'; // Adauga '\0' in sir
+    
+}
+
+void confirmNickname(const char* nickname) {
+    lcd.clear();
+    lcd.print("Confirm Nick:");
+    lcd.setCursor(0, 1);
+    lcd.print(nickname);
+    lcd.setCursor(0, 2);
+    lcd.print("Hold btn to save");
+
+    while (true) {
+        if (digitalRead(joystickSW) == LOW) { 
+            unsigned long pressTime = millis();
+            while (digitalRead(joystickSW) == LOW) {
+                if (millis() - pressTime > 2000) { // Apasare prelunga (peste 2 secunde)
+                    // Salvare nickname în EEPROM
+                    for (int i = 0; i < 10; i++) {
+                        EEPROM.update(NICKNAME_ADDRESS + i, nickname[i]);
+                        if (nickname[i] == '\0') break; // Dacă apare '\0' bucla se incheie
+                    }
+
+                    lcd.clear();
+                    lcd.print("Nickname salvat!");
+                    delay(2000);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+void initializeHighscores() {
+  for (int i = 0; i < 5; i++) { 
+    EEPROM.get(i * sizeof(Highscore), highscores[i]);
+    if (!highscores[i].isSet) { // Un scor neinitializat este 0.
+      strcpy(highscores[i].nickname, "N/A");
+      highscores[i].score = 0;
+      highscores[i].isSet = false;
+    }
+  }
+}
+
+void updateHighscores(const char* nickname, int newScore) {
+   // Nu prea merge
+    int i;
+    for (i = 0; i < 5; i++) {
+        if (newScore > highscores[i].score) {
+            break;
+        }
+    }
+
+    if (i < 5) {
+        // Deplasare scorurile mai mici
+        for (int j = 4; j > i; j--) {
+            highscores[j] = highscores[j - 1];
+        }
+
+        // Inserare  noul scor
+        highscores[i].score = newScore;
+        strncpy(highscores[i].nickname, nickname, 9);
+        highscores[i].nickname[9] = '\0';
+        highscores[i].isSet = true;
+
+        // Salvare noile highscores in EEPROM
+        for (int k = 0; k < 5; k++) {
+            EEPROM.put(k * sizeof(Highscore), highscores[k]);
+        }
+    }
+}
